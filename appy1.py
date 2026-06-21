@@ -6,15 +6,18 @@ import google.genai as genai
 import streamlit as st
 from PyPDF2 import PdfReader
 from sentence_transformers import SentenceTransformer
-from simple_vector_store import SimpleVectorStore
+from Retrival_Methods.simple_vector_store import SimpleVectorStore
 from sklearn.metrics.pairwise import cosine_similarity
 from read_info_pdf import ingest_uploaded_files
+from Retrival_Methods.Bm_25_vector_store import BM_25
 import time
 load_dotenv()
 
 DATA_DIR = Path("data")
 INDEX_PATH = Path("vector_store.pk")
 INDEX_PATH1 = Path("vector_store1.pk1")
+
+BM_INDEX_PATH = Path("vector_store1.pk3")
 EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
 
 @st.cache_resource
@@ -67,6 +70,8 @@ def main():
     model = load_embedding_model()
     store = SimpleVectorStore.load((INDEX_PATH))
     store1 = SimpleVectorStore.load((INDEX_PATH1))
+
+    bm_store = BM_25.load((INDEX_PATH1))
     max_countchunks=0
     
 
@@ -76,12 +81,18 @@ def main():
         st.write("Upload `.txt` or `.pdf` files and persist the semantic index locally.")
         uploaded_files = st.file_uploader("Upload documents", type=["txt", "pdf"], accept_multiple_files=True)
         ingest_button = st.button("Ingest uploaded files")
+       
         if ingest_button and uploaded_files:
             with st.spinner("Embedding documents..."):
                 count = ingest_uploaded_files(uploaded_files, store, model)
                 store.save(INDEX_PATH)
+                
                 count1 = ingest_uploaded_files(uploaded_files, store1, model)
                 store1.save(INDEX_PATH1)
+
+                ingest_uploaded_files(uploaded_files, bm_store, model)
+                bm_store.save(BM_INDEX_PATH)
+               
                 st.session_state.chunk_count = min(count, count1)
 
             st.success(f"Ingested {st.session_state.chunk_count} text chunks into vector store.")
@@ -112,17 +123,30 @@ def main():
             if not query:
                 st.warning("Enter a question before searching.")
                 return
-
+            # Different Retrival method and implementions
             with st.spinner("Retrieving relevant context..."):
+
+                # Dense Retrieval via Exact K-Nearest Neighbors (KNN) using Cosine Similarity Retrival methord chunking mehod 1
+
                 start_time = time.time()
                 results = store.search(query, model, top_k=top_k)
                 contexts = "\n\n".join([f"Source: {item['source']}\n{item['text']}" for item in results])
                 search_time = time.time() - start_time
                 st.write(f"All the context creation and the searching is completed in {search_time:.3f} seconds for normal chunking methord model")
                 
+
+
+                # Dense Retrieval via Exact K-Nearest Neighbors (KNN) using Cosine Similarity Retrival methord chunking mehod 2
                 start_time = time.time()
                 results = store1.search(query, model, top_k=top_k)
                 contexts1 = "\n\n".join([f"Source: {item['source']}\n{item['text']}" for item in results])
+                search_time = time.time() - start_time
+                st.write(f"All the context creation and the searching is completed in {search_time:.3f} seconds for sementic chunking bassed model")
+
+                # Hybrid Search (Dense Vector + Sparse BM25) Retrival method
+                start_time = time.time()
+                results = bm_store.search(query, model, top_k=top_k)
+                contexts2 = "\n\n".join([f"Source: {item['source']}\n{item['text']}" for item in results])
                 search_time = time.time() - start_time
                 st.write(f"All the context creation and the searching is completed in {search_time:.3f} seconds for sementic chunking bassed model")
 
@@ -131,7 +155,9 @@ def main():
             st.subheader("Answer")
             answer = generate_answer_with_gemini(query, contexts)
             answer1 = generate_answer_with_gemini(query, contexts1)
-            if answer and answer1:
+            answer2= generate_answer_with_gemini(query, contexts2)
+
+            if answer and answer1 and answer2:
                 st.markdown(
                     "<h4 style='color:red;'>With normal chunking we are getting the following answer</h4>",
                     unsafe_allow_html=True
@@ -143,6 +169,12 @@ def main():
                     unsafe_allow_html=True
                 )
                 st.write(answer1)
+
+                st.markdown(
+                    "<h4 style='color:red;'>With semantic chunking we are getting the following answer</h4>",
+                    unsafe_allow_html=True
+                )
+                st.write(answer2)
 
 
             else:
